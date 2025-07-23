@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -e
+
+# Config
+ROOTFS=$HOME/"alpine-rootfs"
+QEMU="/usr/bin/qemu-arm"
+PROOT="proot"
+
+# 1. Check if minirootfs is installed
+if [ ! -d "$ROOTFS" ]; then
+    echo "[*] Alpine rootfs not found. Installing..."
+    sh -c $(curl -fsSL https://raw.githubusercontent.com/gingrspacecadet/kpm/refs/heads/main/emulate-download.sh)
+fi
+
+# 2. Check if gcc is installed in minirootfs
+GCC_CHECK=$($PROOT -r "$ROOTFS" -q "$QEMU" -b /dev -b /proc -b /sys env PATH=/sbin:/usr/sbin:/usr/bin:/bin:/usr/local/bin /bin/sh -c "which gcc" || true)
+if [ -z "$GCC_CHECK" ]; then
+    echo "[*] gcc not found in rootfs. Installing..."
+    $PROOT -r "$ROOTFS" -q "$QEMU" -b /dev -b /proc -b /sys env PATH=/sbin:/usr/sbin:/usr/bin:/bin:/usr/local/bin /bin/sh -c "apk update && apk add gcc musl-dev"
+fi
+
+# 3. Copy input files to rootfs /tmp and build command
+ARGS=()
+INPUTS=()
+OUTPUT=""
+ORIG_PWD=$(pwd)
+
+# Parse args for -o and input files
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -o)
+            OUTPUT=$2
+            ARGS+=("-o" "/tmp/$2")
+            shift 2
+            ;;
+        *)
+            if [[ -f $1 ]]; then
+                BASENAME=$(basename "$1")
+                cp "$1" "$ROOTFS/tmp/$BASENAME"
+                INPUTS+=("/tmp/$BASENAME")
+                ARGS+=("/tmp/$BASENAME")
+            else
+                ARGS+=("$1")
+            fi
+            shift
+            ;;
+    esac
+done
+
+# 4. Run gcc inside rootfs with working directory set to /tmp
+$PROOT -r "$ROOTFS" -q "$QEMU" -b /dev -b /proc -b /sys -w /tmp env PATH=/sbin:/usr/sbin:/usr/bin:/bin:/usr/local/bin /bin/sh -c "gcc ${ARGS[*]}"
+
+# 5. Copy output file back if -o was used
+if [ -n "$OUTPUT" ]; then
+    cp "$ROOTFS/tmp/$OUTPUT" "$ORIG_PWD/"
+    echo "[*] Output copied to $ORIG_PWD/$OUTPUT"
+fi
